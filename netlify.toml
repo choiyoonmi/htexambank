@@ -1,0 +1,13 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+  # 100문항 생성은 시간이 걸릴 수 있어 함수 실행시간을 늘립니다(유료 플랜에서 최대 26초).
+  # 무료 플랜은 10초 제한이라, 오래 걸리면 50문항으로 쓰거나 아래 안내대로 배치 축소를 권장합니다.
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
