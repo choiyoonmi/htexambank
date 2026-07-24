@@ -74,8 +74,12 @@ app.post("/.netlify/functions/analyze", async (req, res) => {
       "\n\n아래에 기출 시험지와 범위 자료(이미지/PDF)를 첨부한다. 분석해 JSON으로만 답하라." }];
     for (const f of gichul) content.push(fileBlock(f));
     for (const f of scopeFiles) content.push(fileBlock(f));
-    const text = await callClaude({ system: ANALYZE_SYSTEM, content, max_tokens: 8000 });
-    res.json(extractObj(text));
+    let profileObj;
+    for (let i = 0; i < 3; i++) {
+      try { const text = await callClaude({ system: ANALYZE_SYSTEM, content, max_tokens: 8000 }); profileObj = extractObj(text); break; }
+      catch (err) { if (i === 2) throw err; }
+    }
+    res.json(profileObj);
   } catch (e) {
     res.status(502).json({ error: "분석 실패: " + (e.message || String(e)) });
   }
@@ -99,7 +103,8 @@ const GEN_GUIDELINE = `너는 대한민국 중·고 영어 내신 '적중 예상
 
 [출력 형식] 순수 JSON 배열만 출력(마크다운·설명 금지). 각 원소:
 {"n":정수,"sec":"어법|독해|어휘|의사소통|서술형","stem":"발문(번호 포함)","box":["지문/보기/조건 줄들, 없으면 생략"],"ch":["① ...","..."],"ans":"객관식은 번호/서술형은 모범답안","sol":"해설","tag":"[문법/유형][예상확률]"}
-영어 문장은 문법적으로 정확해야 하며 ①②③, ⓐⓑⓒⓓⓔ 기호를 사용한다.`;
+영어 문장은 문법적으로 정확해야 하며 ①②③, ⓐⓑⓒⓓⓔ 기호를 사용한다.
+매우 중요(JSON 규칙): 반드시 문법적으로 유효한 JSON만 출력한다. 문자열 값 안에서는 큰따옴표(") 대신 작은따옴표(') 또는 홑화살괄호(〈 〉)를 사용하고, 값 안에 줄바꿈을 넣지 않는다.`;
 
 app.post("/.netlify/functions/generate", async (req, res) => {
   try {
@@ -118,8 +123,12 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       (section === "독해" ? "독해는 위 본문(passage)을 근거로 만들고 발문에 '윗글'로 참조한다.\n" : "") +
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
       "순수 JSON 배열만 출력하라.";
-    const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 });
-    res.json({ questions: extractArr(text) });
+    let questions;
+    for (let i = 0; i < 3; i++) {
+      try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); questions = extractArr(text); break; }
+      catch (err) { if (i === 2) throw err; }
+    }
+    res.json({ questions });
   } catch (e) {
     res.status(502).json({ error: "생성 실패(" + (req.body && req.body.section) + "): " + (e.message || String(e)) });
   }
