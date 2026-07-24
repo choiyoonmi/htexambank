@@ -111,7 +111,7 @@ app.post("/.netlify/functions/generate", async (req, res) => {
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다." });
     const { profile = {}, section, count, startNum = 1, school = "", grade = "" } = req.body || {};
     if (!section || !count) return res.status(400).json({ error: "section, count 필요" });
-    const user =
+    const buildUser = (c, sn) =>
       "학교: " + school + " / 학년: " + grade + "\n" +
       "[기출 유형 프로파일]\n" + (profile.typeProfile || "") + "\n" +
       "[서술형 재현 지침]\n" + (profile.seomulHint || "") + "\n" +
@@ -119,14 +119,24 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       "[의사소통기능]\n" + (profile.functions || []).join(", ") + "\n" +
       "[핵심어휘]\n" + (profile.vocab || []).join(", ") + "\n" +
       "[본문 passage]\n" + (profile.passage || "(제공된 본문 없음)") + "\n\n" +
-      "위 정보를 근거로 '" + section + "' 영역 문항을 정확히 " + count + "개 생성하라. 번호는 " + startNum + "번부터.\n" +
+      "위 정보를 근거로 '" + section + "' 영역 문항을 정확히 " + c + "개 생성하라. 번호는 " + sn + "번부터.\n" +
       (section === "독해" ? "독해는 위 본문(passage)을 근거로 만들고 발문에 '윗글'로 참조한다.\n" : "") +
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
       "순수 JSON 배열만 출력하라.";
-    let questions;
-    for (let i = 0; i < 3; i++) {
-      try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); questions = extractArr(text); break; }
-      catch (err) { if (i === 2) throw err; }
+    // 안정성: 한 번에 많이 뽑으면 JSON이 깨지기 쉬우므로 5문항씩 나눠 생성(각 3회 재시도)
+    const CHUNK = 5;
+    let questions = [];
+    let done = 0;
+    while (done < count) {
+      const c = Math.min(CHUNK, count - done);
+      const user = buildUser(c, startNum + done);
+      let part;
+      for (let i = 0; i < 3; i++) {
+        try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); part = extractArr(text); break; }
+        catch (err) { if (i === 2) throw err; }
+      }
+      questions = questions.concat(part);
+      done += c;
     }
     res.json({ questions });
   } catch (e) {
