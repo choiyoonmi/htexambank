@@ -74,7 +74,7 @@ app.post("/.netlify/functions/analyze", async (req, res) => {
       "\n\n아래에 기출 시험지와 범위 자료(이미지/PDF)를 첨부한다. 분석해 JSON으로만 답하라." }];
     for (const f of gichul) content.push(fileBlock(f));
     for (const f of scopeFiles) content.push(fileBlock(f));
-    const text = await callClaude({ system: ANALYZE_SYSTEM, content, max_tokens: 3000 });
+    const text = await callClaude({ system: ANALYZE_SYSTEM, content, max_tokens: 8000 });
     res.json(extractObj(text));
   } catch (e) {
     res.status(502).json({ error: "분석 실패: " + (e.message || String(e)) });
