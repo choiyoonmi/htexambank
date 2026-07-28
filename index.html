@@ -111,14 +111,15 @@ async function run(){
     log('   유형 프로파일 확보 완료.');
 
     const plan = mix(COUNT);
-    let all=[], start=1;
-    for(const sec of ["어법","독해","어휘","의사소통","서술형"]){
-      const n=plan[sec];
-      log('② ['+sec+'] '+n+'문항 생성 중...');
-      const r = await post('/.netlify/functions/generate', { profile, section:sec, count:n, startNum:start, school, grade });
-      (r.questions||[]).forEach((q,i)=>{ q.n=start+i; q.sec=sec; }); // 번호 정규화
-      all=all.concat(r.questions||[]); start+=n;
-    }
+    const secList=["어법","독해","어휘","의사소통","서술형"];
+    let s=1; const meta=secList.map(sec=>{ const m={sec,n:plan[sec],start:s}; s+=plan[sec]; return m; });
+    log('② 전 영역 동시 생성 중... (몇 분 걸릴 수 있어요)');
+    const results = await Promise.all(meta.map(m =>
+      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade })
+        .then(r => (r.questions||[]).map((q,i)=>{ q.n=m.start+i; q.sec=m.sec; return q; }))
+        .then(qs => { log('   ['+m.sec+'] 완료'); return qs; })
+    ));
+    const all = results.flat();
     log('③ Word 문서 생성 중...');
     const rangeHeader = buildRangeHeader(school, grade, scopeText, profile);
     const munje = await buildDoc(all, profile, rangeHeader, false);
