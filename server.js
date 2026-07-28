@@ -123,21 +123,22 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       (section === "독해" ? "독해는 위 본문(passage)을 근거로 만들고 발문에 '윗글'로 참조한다.\n" : "") +
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
       "순수 JSON 배열만 출력하라.";
-    // 안정성: 한 번에 많이 뽑으면 JSON이 깨지기 쉬우므로 5문항씩 나눠 생성(각 3회 재시도)
+    // 안정성: 5문항씩 나눠 생성(각 3회 재시도). 속도: 묶음들을 병렬로 동시 처리.
     const CHUNK = 5;
-    let questions = [];
-    let done = 0;
-    while (done < count) {
+    const jobs = [];
+    for (let done = 0; done < count; done += CHUNK) {
       const c = Math.min(CHUNK, count - done);
-      const user = buildUser(c, startNum + done);
-      let part;
-      for (let i = 0; i < 3; i++) {
-        try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); part = extractArr(text); break; }
-        catch (err) { if (i === 2) throw err; }
-      }
-      questions = questions.concat(part);
-      done += c;
+      const sn = startNum + done;
+      jobs.push((async () => {
+        const user = buildUser(c, sn);
+        for (let i = 0; i < 3; i++) {
+          try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); return extractArr(text); }
+          catch (err) { if (i === 2) throw err; }
+        }
+      })());
     }
+    const parts = await Promise.all(jobs);
+    const questions = parts.flat();
     res.json({ questions });
   } catch (e) {
     res.status(502).json({ error: "생성 실패(" + (req.body && req.body.section) + "): " + (e.message || String(e)) });
