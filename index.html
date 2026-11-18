@@ -67,6 +67,12 @@
   </div>
 
   <div class="card">
+    <h2><span class="step">5</span> 외부지문 대비</h2>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:600;"><input id="extOn" type="checkbox" checked style="width:auto;" /> 이 학교 외부지문 패턴으로 '처음 보는 글' 문항도 만들기</label>
+    <div id="extInfo" class="hint">학교·학년을 쓰면 해피트리 시험 분석(학교·과목별 출제 분석)에 쌓인 외부지문 패턴을 자동으로 불러와요.</div>
+  </div>
+
+  <div class="card">
     <h2><span class="step">6</span> 문항 수</h2>
     <div class="countbtns">
       <button id="c50" onclick="setCount(50)">50문제</button>
@@ -88,11 +94,40 @@ function log(m){ const el=document.getElementById('log'); el.style.display='bloc
 function fileToB64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
 async function packFiles(input){ const out=[]; for(const f of input.files){ out.push({ name:f.name, mediaType:f.type||(f.name.endsWith('.pdf')?'application/pdf':'text/plain'), data:await fileToB64(f) }); } return out; }
 
-function mix(total){
-  return total===50
+function mix(total, ext){
+  const m = total===50
     ? {"어법":10,"독해":13,"어휘":6,"의사소통":6,"서술형":15}
     : {"어법":20,"독해":25,"어휘":13,"의사소통":12,"서술형":30};
+  // 외부지문(11/18): 학교 패턴이 있으면 독해에서 떼어 '처음 보는 글' 문항으로 — 지문 하나에 2문항이라 짝수
+  if(ext){ const n = total===50 ? 6 : 12; m["외부지문"]=n; m["독해"]-=n; }
+  return m;
 }
+
+/* ---------- 외부지문 패턴: 해피트리 시험 서버(확정 분류)에서 학교·학년별로 ---------- */
+const EXAM_SERVER = "https://happytree-exam-server.white21040.workers.dev";
+let EXT = null;   // {exams:[{term,examType,share,items:[{no,type,jae,src,note}]}]}
+async function loadExt(){
+  const school=document.getElementById('school').value.trim(), grade=document.getElementById('grade').value;
+  const info=document.getElementById('extInfo'); EXT=null;
+  if(!school || !/중|고/.test(grade)){ info.textContent='학교·학년을 쓰면 해피트리 시험 분석에 쌓인 외부지문 패턴을 자동으로 불러와요.'; return; }
+  try{
+    const r=await fetch(EXAM_SERVER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:'ext_pattern',school,grade:grade.replace(/[^0-9]/g,''),subject:'eng'})});
+    const d=await r.json(); const ex=(d.exams||[]).filter(e=>e.items&&e.items.length);
+    if(!ex.length){ info.innerHTML='이 학교·학년은 아직 외부지문 기록이 없어요. (체크하면 일반적인 \'처음 보는 글\' 문항으로 만들어요)'; return; }
+    EXT={exams:ex};
+    const T={}, S={}; ex.forEach(e=>e.items.forEach(x=>{ T[x.type]=(T[x.type]||0)+1; if(x.src) S[x.src]=(S[x.src]||0)+1; }));
+    const top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).map(([k,v])=>k+' '+v).join(' · ');
+    info.innerHTML='✅ <b>'+ex.length+'개 시험</b>에서 외부지문 '+ex.reduce((n,e)=>n+e.items.length,0)+'문항 · 비중 '+ex.map(e=>e.term.replace('-',' ')+'학기 '+(e.examType==='fin'?'기말':'중간')+' '+e.share+'%').join(', ')
+      +'<br>유형: '+top(T)+(Object.keys(S).length?'<br>출처: '+top(S):'')
+      +'<br><span style="color:#556">예: '+ex.flatMap(e=>e.items.map(x=>x.note)).filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).slice(0,4).join(' / ')+'</span>';
+  }catch(e){ info.textContent='외부지문 패턴을 못 불러왔어요: '+(e.message||e); }
+}
+function extText(){
+  if(!EXT) return '';
+  return EXT.exams.map(e=>'['+e.term+'학기 '+(e.examType==='fin'?'기말':'중간')+' 외부지문 비중 '+e.share+'%] '
+    + e.items.map(x=>x.no+'번 '+x.type+' '+x.jae+'점'+(x.src?' / 출처 '+x.src:'')+(x.note?' / '+x.note:'')).join('; ')).join('\n');
+}
+document.addEventListener('DOMContentLoaded',()=>{ ['school','grade'].forEach(id=>document.getElementById(id).addEventListener('change',loadExt)); });
 
 async function run(){
   const go=document.getElementById('go'); go.disabled=true;
@@ -110,12 +145,14 @@ async function run(){
     const profile = await post('/.netlify/functions/analyze', { school, grade, scopeText, gichul, scopeFiles });
     log('   유형 프로파일 확보 완료.');
 
-    const plan = mix(COUNT);
-    const secList=["어법","독해","어휘","의사소통","서술형"];
+    const useExt = document.getElementById('extOn').checked;
+    if(useExt && !EXT) await loadExt();
+    const plan = mix(COUNT, useExt);
+    const secList=["어법","독해"].concat(useExt?["외부지문"]:[]).concat(["어휘","의사소통","서술형"]);
     let s=1; const meta=secList.map(sec=>{ const m={sec,n:plan[sec],start:s}; s+=plan[sec]; return m; });
     log('② 전 영역 동시 생성 중... (몇 분 걸릴 수 있어요)');
     const results = await Promise.all(meta.map(m =>
-      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade })
+      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade, extPattern: m.sec==='외부지문' ? extText() : '' })
         .then(r => (r.questions||[]).map((q,i)=>{ q.n=m.start+i; q.sec=m.sec; return q; }))
         .then(qs => { log('   ['+m.sec+'] 완료'); return qs; })
     ));
@@ -171,7 +208,7 @@ async function buildDoc(all, profile, hdr, isAnswer){
     });
   }else{
     let cur="";
-    const T={"어법":"Ⅰ. 어법","독해":"Ⅱ. 독해 — 아래 [본문]을 읽고 답하시오","어휘":"Ⅲ. 어휘","의사소통":"Ⅳ. 의사소통","서술형":"Ⅴ. 서술형"};
+    const T={"어법":"Ⅰ. 어법","독해":"Ⅱ. 독해 — 아래 [본문]을 읽고 답하시오","어휘":"Ⅲ. 어휘","의사소통":"Ⅳ. 의사소통","서술형":"Ⅴ. 서술형","외부지문":"Ⅱ-2. 외부지문 — 처음 보는 글을 읽고 답하시오"};
     all.forEach(q=>{
       if(q.sec!==cur){cur=q.sec;body.push(H1(T[cur]||q.sec));
         if(cur==="독해" && profile.passage){ body.push(box(["[본문]"].concat(String(profile.passage).split(/\n+/).filter(Boolean)))); }

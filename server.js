@@ -106,11 +106,21 @@ const GEN_GUIDELINE = `너는 대한민국 중·고 영어 내신 '적중 예상
 영어 문장은 문법적으로 정확해야 하며 ①②③, ⓐⓑⓒⓓⓔ 기호를 사용한다.
 매우 중요(JSON 규칙): 반드시 문법적으로 유효한 JSON만 출력한다. 문자열 값 안에서는 큰따옴표(") 대신 작은따옴표(') 또는 홑화살괄호(〈 〉)를 사용하고, 값 안에 줄바꿈을 넣지 않는다.`;
 
+// 외부지문(11/18): 교과서에 없는 '처음 보는 글'을 그 학교 선생님 방식으로 직접 써서 출제
+const EXT_GUIDE = `[외부지문 영역 — 위 '범위 밖 창작 금지'의 예외]
+- 이 영역은 교과서 본문을 쓰지 않는다. 선생님이 직접 쓴 것 같은 '처음 보는 글'을 새로 써서 출제한다.
+- 글감: 시험범위 단원 주제와 이어지는 인물·사건·배경지식 글, 또는 본문 내용을 대화문·일기·안내문으로 바꾼 변형. 아래 학교 패턴의 메모(소재)와 비슷한 결로 쓰되 똑같이 베끼지 않는다.
+- 길이 110~170단어, 해당 학년 수준. 목표문법을 자연스럽게 2~3곳 넣는다(어법 문항의 근거).
+- 지문 1개당 정확히 2문항. 첫 문항의 box 첫 줄에 '[지문 A]'처럼 이름을 붙이고 지문 전체를 싣는다. 둘째 문항은 box 없이 발문을 '[지문 A] 윗글의 ...'로 쓴다.
+- 문항 유형 비율은 학교 패턴을 따른다(예: 주제·목적, 빈칸, 어법(밑줄 ⓐ~ⓔ 또는 (A)(B)(C) 네모), 내용일치, 함축 의미). 패턴에 서술형이 있으면 둘째 문항을 지문 속 우리말 밑줄 영작(제시어·조건)으로 낸다.
+- sec 값은 "외부지문". tag에 '[외부지문/유형][소재]'를 적는다.`;
+
 app.post("/.netlify/functions/generate", async (req, res) => {
   try {
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다." });
-    const { profile = {}, section, count, startNum = 1, school = "", grade = "" } = req.body || {};
+    const { profile = {}, section, count, startNum = 1, school = "", grade = "", extPattern = "" } = req.body || {};
     if (!section || !count) return res.status(400).json({ error: "section, count 필요" });
+    const isExt = section === "외부지문";
     const buildUser = (c, sn) =>
       "학교: " + school + " / 학년: " + grade + "\n" +
       "[기출 유형 프로파일]\n" + (profile.typeProfile || "") + "\n" +
@@ -122,9 +132,10 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       "위 정보를 근거로 '" + section + "' 영역 문항을 정확히 " + c + "개 생성하라. 번호는 " + sn + "번부터.\n" +
       (section === "독해" ? "독해는 위 본문(passage)을 근거로 만들고 발문에 '윗글'로 참조한다.\n" : "") +
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
+      (isExt ? EXT_GUIDE + "\n[이 학교 외부지문 기출 패턴]\n" + (extPattern || "(기록 없음 — 일반적인 중학교 내신 외부지문 방식으로)") + "\n" : "") +
       "순수 JSON 배열만 출력하라.";
     // 안정성: 5문항씩 나눠 생성(각 3회 재시도). 속도: 묶음들을 병렬로 동시 처리.
-    const CHUNK = 5;
+    const CHUNK = isExt ? 4 : 5;   // 외부지문은 지문 1개에 2문항이라 짝수 묶음
     const jobs = [];
     for (let done = 0; done < count; done += CHUNK) {
       const c = Math.min(CHUNK, count - done);
