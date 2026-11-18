@@ -54,6 +54,11 @@
   <div class="card">
     <h2><span class="step">1</span> 기출 시험지 업로드</h2>
     <label>기출 PDF 또는 이미지 (여러 장 가능)</label>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button type="button" id="libPickBtn" onclick="libPick()" style="width:auto;padding:9px 14px;border-radius:8px;border:1.5px solid #16305c;background:#16305c;color:#fff;font-weight:700;cursor:pointer;">🗂 자료실에서 고르기</button>
+      <span class="hint" style="margin:0;">또는 내 컴퓨터에서 ↓</span>
+    </div>
+    <div id="libList" style="margin:8px 0;"></div>
     <input id="gichul" type="file" accept=".pdf,image/*" multiple />
     <div class="hint">스캔본도 됩니다. Claude가 이미지로 직접 읽어 유형·함정을 분석합니다.</div>
   </div>
@@ -92,6 +97,55 @@ let COUNT = 100;
 function setCount(n){ COUNT=n; document.getElementById('c50').classList.toggle('on',n===50); document.getElementById('c100').classList.toggle('on',n===100); }
 function log(m){ const el=document.getElementById('log'); el.style.display='block'; el.textContent += m + "\n"; }
 function fileToB64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+/* ---------- 🗂 관리자 자료실에서 기출 고르기(11/18) ----------
+   이 화면은 관리자 안(iframe)이나 ↗ 새 창으로 열린다. 로그인한 관리자 화면에 목록·파일을 부탁하고(postMessage),
+   관리자가 자료실에서 찾아 파일 내용을 그대로 넘겨준다. 관리자 밖에서 열면 버튼이 안내만. */
+const ADMIN_ORIGIN = "https://admin.happytreeacademy.com";
+const LIB = { files:[], picked:{} };   // picked[id] = {name, mediaType, data}
+function adminWin(){ if(window.parent && window.parent!==window) return window.parent; if(window.opener && !window.opener.closed) return window.opener; return null; }
+function libAsk(msg){ const w=adminWin(); if(!w) return false; w.postMessage(msg, ADMIN_ORIGIN); return true; }
+function libPick(){
+  const box=document.getElementById('libList');
+  const school=document.getElementById('school').value.trim(), grade=document.getElementById('grade').value;
+  if(!school){ box.innerHTML='<div class="hint" style="color:#c0392b">위 ② 학교 이름을 먼저 써 주세요.</div>'; return; }
+  if(!libAsk({type:'ht-lib-list', school, grade, subj:'영어'})){ box.innerHTML='<div class="hint" style="color:#c0392b">관리자 화면(시험·교재 자료 › 문제은행)에서 열었을 때만 자료실을 쓸 수 있어요.</div>'; return; }
+  box.innerHTML='<div class="hint">자료실에서 찾는 중… ⏳</div>';
+}
+function libDraw(){
+  const box=document.getElementById('libList');
+  const n=Object.keys(LIB.picked).filter(k=>LIB.picked[k]&&LIB.picked[k].data).length;
+  box.innerHTML='<div style="border:1.5px solid #dde5ee;border-radius:10px;padding:8px 10px;background:#f7f9fc;max-height:260px;overflow:auto;">'
+    + LIB.files.map(f=>{ const st=LIB.picked[f.id]; const tag=!st?'':(st.loading?' ⏳':(st.data?' ✅':(st.err?' ⚠ '+st.err:'')));
+      return '<label style="display:flex;gap:8px;align-items:center;padding:4px 0;font-weight:500;cursor:pointer;"><input type="checkbox" style="width:auto;" '+(st?'checked':'')+' onchange="libToggle('+JSON.stringify(String(f.id)).replace(/"/g,'&quot;')+',this.checked)"> <span><b>'+esc(f.label)+'</b> · '+esc(f.name)+tag+'</span></label>'; }).join('')
+    + '</div><div class="hint">'+(n?'✅ 자료실 시험지 '+n+'개가 기출로 들어가요.':'분석할 시험지에 체크하세요. (내 컴퓨터 파일과 같이 써도 돼요)')+'</div>';
+}
+function esc(t){ return String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function libToggle(id, on){
+  if(!on){ delete LIB.picked[id]; libDraw(); return; }
+  const f=LIB.files.find(x=>String(x.id)===id); if(!f) return;
+  LIB.picked[id]={loading:true}; libDraw();
+  libAsk({type:'ht-lib-get', id, name:f.name, folderHint:f.folder, school:document.getElementById('school').value.trim()});
+}
+window.addEventListener('message', e=>{
+  if(e.origin!==ADMIN_ORIGIN || !e.data) return;
+  const m=e.data;
+  if(m.type==='ht-lib-list-r'){
+    LIB.files=m.files||[]; LIB.picked={};
+    if(!LIB.files.length){ document.getElementById('libList').innerHTML='<div class="hint" style="color:#c0392b">'+esc(m.msg||'자료실에 맞는 시험지가 없어요.')+'</div>'; return; }
+    libDraw();
+  }
+  if(m.type==='ht-lib-get-r'){
+    const id=String(m.id); if(!LIB.picked[id]) return;
+    if(!m.buf){ LIB.picked[id]={err:m.msg||'받지 못했어요'}; libDraw(); return; }
+    const f=LIB.files.find(x=>String(x.id)===id)||{};
+    const bytes=new Uint8Array(m.buf); let bin=''; for(let i=0;i<bytes.length;i+=0x8000) bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+0x8000));
+    const mt=(f.type||m.mime||'').split(';')[0] || (/\.pdf$/i.test(f.name||'')?'application/pdf':'image/jpeg');
+    LIB.picked[id]={ name:f.name||m.name, mediaType:mt, data:btoa(bin) };
+    libDraw();
+  }
+});
+document.addEventListener('DOMContentLoaded',()=>{ ['school','grade'].forEach(id=>document.getElementById(id).addEventListener('change',()=>{ if(LIB.files.length){ LIB.files=[]; LIB.picked={}; document.getElementById('libList').innerHTML='<div class="hint">학교·학년이 바뀌었어요. 🗂 자료실에서 고르기를 다시 눌러 주세요.</div>'; } })); });
+
 async function packFiles(input){ const out=[]; for(const f of input.files){ out.push({ name:f.name, mediaType:f.type||(f.name.endsWith('.pdf')?'application/pdf':'text/plain'), data:await fileToB64(f) }); } return out; }
 
 function mix(total, ext){
@@ -136,9 +190,10 @@ async function run(){
     const school=document.getElementById('school').value.trim();
     const grade=document.getElementById('grade').value;
     const scopeText=document.getElementById('scopeText').value.trim();
-    const gichul=await packFiles(document.getElementById('gichul'));
+    if(Object.values(LIB.picked).some(x=>x&&x.loading)){ alert('자료실 시험지를 아직 받는 중이에요. 잠시 뒤 다시 눌러 주세요.'); go.disabled=false; return; }
+    const gichul=(await packFiles(document.getElementById('gichul'))).concat(Object.values(LIB.picked).filter(x=>x&&x.data));
     const scopeFiles=await packFiles(document.getElementById('scopeFiles'));
-    if(!gichul.length){ alert('기출 시험지를 업로드하세요.'); go.disabled=false; return; }
+    if(!gichul.length){ alert('기출 시험지를 🗂 자료실에서 고르거나 업로드하세요.'); go.disabled=false; return; }
     if(!scopeText && !scopeFiles.length){ alert('시험범위(파일 또는 텍스트)를 입력하세요.'); go.disabled=false; return; }
 
     log('① 기출 분석 중...');
