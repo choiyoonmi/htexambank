@@ -115,6 +115,7 @@ const EXT_GUIDE = `[외부지문 영역 — 위 '범위 밖 창작 금지'의 �
 - 글감은 반드시 [이번 시험 범위]의 단원 주제(topics)·본문에서 뻗어 나간 것이다: 같은 주제의 다른 인물·사례·배경지식 글, 또는 이번 본문 내용을 대화문·일기·안내문으로 바꾼 변형.
 - 아래 [이 학교 외부지문 기출 패턴]은 '지난 시험'의 기록이다. 유형·형식·배점·출제 방식(예: 단원 주제 연계, 자작 글)만 참고하고, 거기 적힌 소재·인물·이야기(메모)는 절대 다시 쓰지 않는다.
 - 아래 [이 묶음에 쓸 소재]가 주어지면 지문마다 그 소재를 순서대로 하나씩 쓴다.
+- 아래 [이 묶음에 쓸 지문 — 학교 부교재 원문]이 주어지면 새 글을 쓰지 말고 그 원문을 지문으로 그대로 싣는다(문항에 필요한 밑줄·기호·빈칸·(A) 우리말 박스 표시만 넣는다). 이 경우 위 글감·길이 규칙은 따르지 않는다.
 - 길이 110~170단어, 해당 학년 수준. 목표문법을 자연스럽게 2~3곳 넣는다(어법 문항의 근거).
 - 지문 1개당 정확히 2문항. 첫 문항의 box 첫 줄에 '[지문 X]'처럼 이름을 붙이고 지문 전체를 싣는다. 둘째 문항은 box 없이 발문을 '번호. [지문 X] 윗글의 ...'로 쓴다. 지문 이름 글자는 아래에서 정해 준 것만 쓴다.
 - 모든 발문(stem)은 반드시 문항 번호로 시작한다(예: '22. [지문 C] 다음 글을 읽고, ...').
@@ -124,13 +125,26 @@ const EXT_GUIDE = `[외부지문 영역 — 위 '범위 밖 창작 금지'의 �
 app.post("/.netlify/functions/generate", async (req, res) => {
   try {
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다." });
-    const { profile = {}, section, count, startNum = 1, school = "", grade = "", extPattern = "", examName = "", scopeUnits = "" } = req.body || {};
+    const { profile = {}, section, count, startNum = 1, school = "", grade = "", extPattern = "", examName = "", scopeUnits = "", extFiles = [] } = req.body || {};
     if (!section || !count) return res.status(400).json({ error: "section, count 필요" });
     const isExt = section === "외부지문";
     const CHUNK = isExt ? 4 : 5;   // 외부지문은 지문 1개에 2문항이라 짝수 묶음
     // 외부지문(11/19): 묶음들이 동시에 돌아 같은 소재를 겹쳐 쓰던 것 → 먼저 이번 범위 주제로 서로 다른 소재를 한 번에 정해 나눠 준다
-    let extTopics = [];
-    if (isExt) {
+    let extTopics = [], extPass = [];
+    // 학교 부교재가 올라오면(11/19 대천중) 거기서 지문 N개를 원문 그대로 골라 묶음마다 나눠 준다 — 파일은 이 한 번만 보냄
+    if (isExt && extFiles.length) {
+      const need = Math.ceil(count / 2);
+      const content = [{ type: "text", text:
+        "이번 시험: " + (examName || "-") + " / 범위 단원: " + (scopeUnits || "-") + "\n[단원 주제]\n" + (profile.topics || []).join("\n") +
+        "\n\n첨부는 학교가 나눠 준 외부지문 부교재다. 이번 시험 범위에 맞는 읽기 지문을 서로 다른 것으로 정확히 " + need + "개 골라, 영어 원문을 한 글자도 바꾸지 말고 옮겨라(문제·해설·번호는 빼고 지문만). 지문이 " + need + "개보다 적으면 있는 만큼만." +
+        " 출력은 JSON 배열만: [{\"title\":\"부교재 속 제목이나 첫 몇 단어\",\"text\":\"지문 원문(줄바꿈 없이, 큰따옴표는 작은따옴표로)\"}]" }];
+      for (const f of extFiles) content.push(fileBlock(f));
+      for (let i = 0; i < 2 && !extPass.length; i++) {
+        try { extPass = extractArr(await callClaude({ system: "너는 문서에서 영어 지문을 정확히 옮겨 적는 조교다. 순수 JSON 배열만 출력한다.", max_tokens: 8000, content }))
+          .filter(p => p && p.text).slice(0, need); } catch (e) {}
+      }
+    }
+    if (isExt && !extPass.length) {
       const need = Math.ceil(count / 2);
       try {
         const t = await callClaude({ system: "너는 중학교 영어 내신 출제 교사다. 순수 JSON 문자열 배열만 출력한다.", max_tokens: 1200, content: [{ type: "text", text:
@@ -157,7 +171,9 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
       (isExt ? EXT_GUIDE + "\n[이 학교 외부지문 기출 패턴 — 지난 시험, 소재 재사용 금지]\n" + (extPattern || "(기록 없음 — 일반적인 중학교 내신 외부지문 방식으로)") + "\n" +
         "[지문 이름] 이 묶음의 지문은 " + LET.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).split("").map(x => "[지문 " + x + "]").join(", ") + " 순서로 이름 붙인다.\n" +
-        (extTopics.length ? "[이 묶음에 쓸 소재]\n" + extTopics.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).join("\n") + "\n" : "") : "") +
+        (extPass.length ? "[이 묶음에 쓸 지문 — 학교 부교재 원문]\n" + extPass.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).map((p, k) => "[지문 " + LET[j * (CHUNK / 2) + k] + "] (" + (p.title || "") + ") " + p.text).join("\n") + "\n" +
+          (extPass.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).length < Math.ceil(c / 2) ? "부교재 지문이 모자라는 지문은 이번 범위 단원 주제로 새로 쓴다.\n" : "") : "") +
+        (!extPass.length && extTopics.length ? "[이 묶음에 쓸 소재]\n" + extTopics.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).join("\n") + "\n" : "") : "") +
       "순수 JSON 배열만 출력하라.";
     // 안정성: 5문항씩 나눠 생성(각 3회 재시도). 속도: 묶음들을 병렬로 동시 처리.
     const jobs = [];

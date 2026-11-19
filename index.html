@@ -79,6 +79,9 @@
   <div class="card">
     <h2><span class="step">5</span> 외부지문 대비</h2>
     <label style="display:flex;align-items:center;gap:8px;font-weight:600;"><input id="extOn" type="checkbox" checked style="width:auto;" /> 이 학교 외부지문 패턴으로 '처음 보는 글' 문항도 만들기</label>
+    <label style="margin-top:10px;">외부지문 자료 (학교에서 나눠 준 부교재·프린트가 있으면 올려 주세요 — PDF/사진, 여러 개 가능)</label>
+    <input id="extFiles" type="file" accept=".pdf,image/*,.txt" multiple />
+    <div class="hint">올리면 외부지문을 새로 쓰지 않고, 이 자료의 지문을 골라 그대로 실어 문제를 만들어요(예: 대천중). 안 올리면 이번 범위 단원 주제로 새 글을 써요(예: 남천중).</div>
     <div id="extInfo" class="hint">학교·학년을 쓰면 해피트리 시험 분석(학교·과목별 출제 분석)에 쌓인 외부지문 패턴을 자동으로 불러와요.</div>
   </div>
 
@@ -185,7 +188,8 @@ async function loadExt(){
     EXT={exams:ex};
     const T={}, S={}; ex.forEach(e=>e.items.forEach(x=>{ T[x.type]=(T[x.type]||0)+1; if(x.src) S[x.src]=(S[x.src]||0)+1; }));
     const top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).map(([k,v])=>k+' '+v).join(' · ');
-    info.innerHTML='✅ <b>'+ex.length+'개 시험</b>에서 외부지문 '+ex.reduce((n,e)=>n+e.items.length,0)+'문항 · 비중 '+ex.map(e=>e.term.replace('-',' ')+'학기 '+(e.examType==='fin'?'기말':'중간')+' '+e.share+'%').join(', ')
+    const bu=ex.reduce((n,e)=>n+e.items.filter(x=>/부교재/.test(x.src||'')).length,0);
+    info.innerHTML=(bu?'<b style="color:#a05a00">📎 이 학교 외부지문은 학교 부교재·프린트에서 나왔어요. 위에 부교재를 올려 주세요.</b><br>':'')+'✅ <b>'+ex.length+'개 시험</b>에서 외부지문 '+ex.reduce((n,e)=>n+e.items.length,0)+'문항 · 비중 '+ex.map(e=>e.term.replace('-',' ')+'학기 '+(e.examType==='fin'?'기말':'중간')+' '+e.share+'%').join(', ')
       +'<br>유형: '+top(T)+(Object.keys(S).length?'<br>출처: '+top(S):'')
       +'<br><span style="color:#556">예: '+ex.flatMap(e=>e.items.map(x=>x.note)).filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).slice(0,4).join(' / ')+'</span>';
   }catch(e){ info.textContent='외부지문 패턴을 못 불러왔어요: '+(e.message||e); }
@@ -207,6 +211,7 @@ async function run(){
     if(Object.values(LIB.picked).some(x=>x&&x.loading)){ alert('자료실 시험지를 아직 받는 중이에요. 잠시 뒤 다시 눌러 주세요.'); go.disabled=false; return; }
     const gichul=(await packFiles(document.getElementById('gichul'))).concat(Object.values(LIB.picked).filter(x=>x&&x.data));
     const scopeFiles=await packFiles(document.getElementById('scopeFiles'));
+    const extFiles=await packFiles(document.getElementById('extFiles'));
     if(!gichul.length){ alert('기출 시험지를 🗂 자료실에서 고르거나 업로드하세요.'); go.disabled=false; return; }
     if(!scopeText && !scopeFiles.length){ alert('시험범위(파일 또는 텍스트)를 입력하세요.'); go.disabled=false; return; }
     const exam=document.getElementById('examName').value.trim(), units=document.getElementById('rangeUnits').value.trim();
@@ -224,7 +229,7 @@ async function run(){
     let s=1; const meta=secList.map(sec=>{ const m={sec,n:plan[sec],start:s}; s+=plan[sec]; return m; });
     log('② 전 영역 동시 생성 중... (몇 분 걸릴 수 있어요)');
     const results = await Promise.all(meta.map(m =>
-      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade, examName:exam, scopeUnits:units, extPattern: m.sec==='외부지문' ? extText() : '' })
+      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade, examName:exam, scopeUnits:units, extPattern: m.sec==='외부지문' ? extText() : '', extFiles: m.sec==='외부지문' ? extFiles : [] })
         .then(r => (r.questions||[]).map((q,i)=>{ q.n=m.start+i; q.sec=m.sec; return q; }))
         .then(qs => { log('   ['+m.sec+'] 완료'); return qs; })
     ));
