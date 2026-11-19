@@ -213,7 +213,8 @@ async function run(){
     if(!exam || !units){ alert('③ 시험(예: 2026 2학기 기말)과 범위 단원(예: 7·8과)을 써 주세요. 보관함에 범위로 남아요.'); go.disabled=false; return; }
 
     log('① 기출 분석 중...');
-    const profile = await post('/.netlify/functions/analyze', { school, grade, scopeText, gichul, scopeFiles });
+    if(!scopeFiles.length && scopeText.length < 300 && !confirm('③ 범위에 교과서 본문(PDF·사진)이나 본문 글이 없어요.\n단원 이름만으로는 생성기가 '+units+' 내용을 몰라서, 독해·외부지문이 범위와 다르게 나와요.\n\n본문을 올리려면 [취소], 그래도 만들려면 [확인]을 눌러 주세요.')){ go.disabled=false; return; }
+    const profile = await post('/.netlify/functions/analyze', { school, grade, scopeText, gichul, scopeFiles, examName:exam, scopeUnits:units });
     log('   유형 프로파일 확보 완료.');
 
     const useExt = document.getElementById('extOn').checked;
@@ -223,7 +224,7 @@ async function run(){
     let s=1; const meta=secList.map(sec=>{ const m={sec,n:plan[sec],start:s}; s+=plan[sec]; return m; });
     log('② 전 영역 동시 생성 중... (몇 분 걸릴 수 있어요)');
     const results = await Promise.all(meta.map(m =>
-      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade, extPattern: m.sec==='외부지문' ? extText() : '' })
+      post('/.netlify/functions/generate', { profile, section:m.sec, count:m.n, startNum:m.start, school, grade, examName:exam, scopeUnits:units, extPattern: m.sec==='외부지문' ? extText() : '' })
         .then(r => (r.questions||[]).map((q,i)=>{ q.n=m.start+i; q.sec=m.sec; return q; }))
         .then(qs => { log('   ['+m.sec+'] 완료'); return qs; })
     ));

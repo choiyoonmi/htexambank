@@ -61,6 +61,7 @@ JSON 스키마:
  "grammarPoints": ["목표문법1","목표문법2"],
  "functions": ["의사소통기능1","의사소통기능2"],
  "vocab": ["핵심어휘1","핵심어휘2"],
+ "topics": ["시험범위 단원별 본문 주제·소재를 한 줄씩(예: '7과 세계의 계절 축제 — 홀리·송크란'). 범위 자료가 없으면 단원 이름에서 짐작하지 말고 빈 배열"],
  "passage": "시험범위의 핵심 Reading 본문만 간결히(최대 500단어). 교재 전체·문제·해설을 옮기지 말 것. 없으면 빈 문자열",
  "seomulHint": "이 학교 서술형을 재현하기 위한 구체 지침(형식·조건 스타일)"
 }`;
@@ -68,9 +69,11 @@ JSON 스키마:
 app.post("/.netlify/functions/analyze", async (req, res) => {
   try {
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다." });
-    const { school = "", grade = "", scopeText = "", gichul = [], scopeFiles = [] } = req.body || {};
+    const { school = "", grade = "", scopeText = "", gichul = [], scopeFiles = [], examName = "", scopeUnits = "" } = req.body || {};
     const content = [{ type: "text", text:
-      "학교: " + school + "\n학년: " + grade + "\n\n[시험범위 텍스트]\n" + (scopeText || "(텍스트 없음, 첨부 파일 참고)") +
+      "학교: " + school + "\n학년: " + grade + "\n이번 시험: " + (examName || "-") + " / 범위 단원: " + (scopeUnits || "-") +
+      "\n※ 기출 시험지는 '지난 시험'이다. 기출의 본문·소재는 유형 분석에만 쓰고, grammarPoints·functions·vocab·topics·passage 는 반드시 '이번 시험 범위' 자료에서만 뽑는다." +
+      "\n\n[시험범위 텍스트]\n" + (scopeText || "(텍스트 없음, 첨부 파일 참고)") +
       "\n\n아래에 기출 시험지와 범위 자료(이미지/PDF)를 첨부한다. 분석해 JSON으로만 답하라." }];
     for (const f of gichul) content.push(fileBlock(f));
     for (const f of scopeFiles) content.push(fileBlock(f));
@@ -109,20 +112,40 @@ const GEN_GUIDELINE = `너는 대한민국 중·고 영어 내신 '적중 예상
 // 외부지문(11/18): 교과서에 없는 '처음 보는 글'을 그 학교 선생님 방식으로 직접 써서 출제
 const EXT_GUIDE = `[외부지문 영역 — 위 '범위 밖 창작 금지'의 예외]
 - 이 영역은 교과서 본문을 쓰지 않는다. 선생님이 직접 쓴 것 같은 '처음 보는 글'을 새로 써서 출제한다.
-- 글감: 시험범위 단원 주제와 이어지는 인물·사건·배경지식 글, 또는 본문 내용을 대화문·일기·안내문으로 바꾼 변형. 아래 학교 패턴의 메모(소재)와 비슷한 결로 쓰되 똑같이 베끼지 않는다.
+- 글감은 반드시 [이번 시험 범위]의 단원 주제(topics)·본문에서 뻗어 나간 것이다: 같은 주제의 다른 인물·사례·배경지식 글, 또는 이번 본문 내용을 대화문·일기·안내문으로 바꾼 변형.
+- 아래 [이 학교 외부지문 기출 패턴]은 '지난 시험'의 기록이다. 유형·형식·배점·출제 방식(예: 단원 주제 연계, 자작 글)만 참고하고, 거기 적힌 소재·인물·이야기(메모)는 절대 다시 쓰지 않는다.
+- 아래 [이 묶음에 쓸 소재]가 주어지면 지문마다 그 소재를 순서대로 하나씩 쓴다.
 - 길이 110~170단어, 해당 학년 수준. 목표문법을 자연스럽게 2~3곳 넣는다(어법 문항의 근거).
-- 지문 1개당 정확히 2문항. 첫 문항의 box 첫 줄에 '[지문 A]'처럼 이름을 붙이고 지문 전체를 싣는다. 둘째 문항은 box 없이 발문을 '[지문 A] 윗글의 ...'로 쓴다.
+- 지문 1개당 정확히 2문항. 첫 문항의 box 첫 줄에 '[지문 X]'처럼 이름을 붙이고 지문 전체를 싣는다. 둘째 문항은 box 없이 발문을 '번호. [지문 X] 윗글의 ...'로 쓴다. 지문 이름 글자는 아래에서 정해 준 것만 쓴다.
+- 모든 발문(stem)은 반드시 문항 번호로 시작한다(예: '22. [지문 C] 다음 글을 읽고, ...').
 - 문항 유형 비율은 학교 패턴을 따른다(예: 주제·목적, 빈칸, 어법(밑줄 ⓐ~ⓔ 또는 (A)(B)(C) 네모), 내용일치, 함축 의미). 패턴에 서술형이 있으면 둘째 문항을 지문 속 우리말 밑줄 영작(제시어·조건)으로 낸다.
 - sec 값은 "외부지문". tag에 '[외부지문/유형][소재]'를 적는다.`;
 
 app.post("/.netlify/functions/generate", async (req, res) => {
   try {
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY가 설정되지 않았습니다." });
-    const { profile = {}, section, count, startNum = 1, school = "", grade = "", extPattern = "" } = req.body || {};
+    const { profile = {}, section, count, startNum = 1, school = "", grade = "", extPattern = "", examName = "", scopeUnits = "" } = req.body || {};
     if (!section || !count) return res.status(400).json({ error: "section, count 필요" });
     const isExt = section === "외부지문";
-    const buildUser = (c, sn) =>
+    const CHUNK = isExt ? 4 : 5;   // 외부지문은 지문 1개에 2문항이라 짝수 묶음
+    // 외부지문(11/19): 묶음들이 동시에 돌아 같은 소재를 겹쳐 쓰던 것 → 먼저 이번 범위 주제로 서로 다른 소재를 한 번에 정해 나눠 준다
+    let extTopics = [];
+    if (isExt) {
+      const need = Math.ceil(count / 2);
+      try {
+        const t = await callClaude({ system: "너는 중학교 영어 내신 출제 교사다. 순수 JSON 문자열 배열만 출력한다.", max_tokens: 1200, content: [{ type: "text", text:
+          "이번 시험: " + (examName || "-") + " / 범위 단원: " + (scopeUnits || "-") + "\n[단원 주제]\n" + (profile.topics || []).join("\n") +
+          "\n[본문 요약]\n" + String(profile.passage || "").slice(0, 1500) +
+          "\n[지난 시험 외부지문 — 이 소재는 쓰지 말 것]\n" + (extPattern || "-") +
+          "\n\n위 '이번 범위' 단원 주제에서 뻗어 나간, 서로 겹치지 않는 외부지문 소재를 정확히 " + need + "개 정하라. 단원마다 고르게 나누고, 교과서 본문과 같은 이야기·지난 시험 소재는 피한다. 각 원소는 '단원 · 소재 한 줄(한국어)' 형식. JSON 배열만." }] });
+        extTopics = extractArr(t).map(String).slice(0, need);
+      } catch (e) { extTopics = []; }
+    }
+    const LET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const buildUser = (c, sn, j) =>
       "학교: " + school + " / 학년: " + grade + "\n" +
+      "[이번 시험 범위] 시험: " + (examName || "-") + " / 단원: " + (scopeUnits || "-") + "\n" +
+      "[단원 주제]\n" + ((profile.topics || []).join("\n") || "(없음)") + "\n" +
       "[기출 유형 프로파일]\n" + (profile.typeProfile || "") + "\n" +
       "[서술형 재현 지침]\n" + (profile.seomulHint || "") + "\n" +
       "[목표문법]\n" + (profile.grammarPoints || []).join(", ") + "\n" +
@@ -132,18 +155,23 @@ app.post("/.netlify/functions/generate", async (req, res) => {
       "위 정보를 근거로 '" + section + "' 영역 문항을 정확히 " + c + "개 생성하라. 번호는 " + sn + "번부터.\n" +
       (section === "독해" ? "독해는 위 본문(passage)을 근거로 만들고 발문에 '윗글'로 참조한다.\n" : "") +
       (section === "서술형" ? "서술형은 품질기준의 형식(다중조건/표형식 오류수정/문장전환·결합)을 반드시 섞어 고난도로 만든다.\n" : "") +
-      (isExt ? EXT_GUIDE + "\n[이 학교 외부지문 기출 패턴]\n" + (extPattern || "(기록 없음 — 일반적인 중학교 내신 외부지문 방식으로)") + "\n" : "") +
+      (isExt ? EXT_GUIDE + "\n[이 학교 외부지문 기출 패턴 — 지난 시험, 소재 재사용 금지]\n" + (extPattern || "(기록 없음 — 일반적인 중학교 내신 외부지문 방식으로)") + "\n" +
+        "[지문 이름] 이 묶음의 지문은 " + LET.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).split("").map(x => "[지문 " + x + "]").join(", ") + " 순서로 이름 붙인다.\n" +
+        (extTopics.length ? "[이 묶음에 쓸 소재]\n" + extTopics.slice(j * (CHUNK / 2), j * (CHUNK / 2) + Math.ceil(c / 2)).join("\n") + "\n" : "") : "") +
       "순수 JSON 배열만 출력하라.";
     // 안정성: 5문항씩 나눠 생성(각 3회 재시도). 속도: 묶음들을 병렬로 동시 처리.
-    const CHUNK = isExt ? 4 : 5;   // 외부지문은 지문 1개에 2문항이라 짝수 묶음
     const jobs = [];
-    for (let done = 0; done < count; done += CHUNK) {
+    for (let done = 0, j = 0; done < count; done += CHUNK, j++) {
       const c = Math.min(CHUNK, count - done);
-      const sn = startNum + done;
+      const sn = startNum + done, jj = j;
       jobs.push((async () => {
-        const user = buildUser(c, sn);
+        const user = buildUser(c, sn, jj);
         for (let i = 0; i < 3; i++) {
-          try { const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 }); return extractArr(text); }
+          try {
+            const text = await callClaude({ system: GEN_GUIDELINE, content: [{ type: "text", text: user }], max_tokens: 8000 });
+            // 번호가 빠진 발문에 번호를 붙인다(11/19 외부지문 둘째 문항 번호 빠짐)
+            return extractArr(text).map((q, k) => { q.n = sn + k; const st = String(q.stem || "").trim(); q.stem = /^\d+\s*[.)]/.test(st) ? st.replace(/^\d+/, String(sn + k)) : (sn + k) + ". " + st; return q; });
+          }
           catch (err) { if (i === 2) throw err; }
         }
       })());
